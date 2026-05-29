@@ -380,22 +380,28 @@ exit 0
 %post
 %if 0%{?is_suse}
 %tmpfiles_create %{_tmpfilesdir}/%{name}.conf
-%service_add_post %{name}.target %{name}@.service %{name}-sentinel.target %{name}-sentinel@.service
+# Install unit files only; do not enable/start. Operator-driven.
+%{?systemd_daemon_reload:%systemd_daemon_reload}
 cat <<'EOF'
 -----------------------------------------------------------------------------
 Valkey has been installed successfully.
 
 Please see %{_docdir}/%{name}/README.SUSE for configuration instructions.
+To enable a default instance:
+    systemctl enable --now valkey@default
 -----------------------------------------------------------------------------
 EOF
 %else
-%systemd_post %{name}.target %{name}@.service %{name}-sentinel.target %{name}-sentinel@.service
+# Install unit files only; do not enable/start. Operator-driven.
+systemctl daemon-reload >/dev/null 2>&1 || :
 systemd-tmpfiles --create %{_tmpfilesdir}/%{name}.conf >/dev/null 2>&1 || :
 cat <<'EOF'
 -----------------------------------------------------------------------------
 Valkey has been installed successfully.
 
 Please see %{_docdir}/%{name}/README.RHEL for configuration instructions.
+To enable a default instance:
+    systemctl enable --now valkey@default
 -----------------------------------------------------------------------------
 EOF
 %endif

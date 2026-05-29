@@ -120,11 +120,15 @@ override_dh_installinit:
 	dh_installinit -pvalkey-server --name=valkey-server
 	dh_installinit -pvalkey-sentinel --name=valkey-sentinel
 
+# Install systemd unit files but do NOT enable or start services on install.
+# Operators decide when to enable/start each instance:
+#   systemctl enable --now valkey@default
+#   systemctl enable --now valkey-sentinel@default
 override_dh_installsystemd:
-	dh_installsystemd -pvalkey-server --name=valkey-server
-	dh_installsystemd -pvalkey-server --name=valkey-server@
-	dh_installsystemd -pvalkey-sentinel --name=valkey-sentinel
-	dh_installsystemd -pvalkey-sentinel --name=valkey-sentinel@
+	dh_installsystemd --no-enable --no-start -pvalkey-server --name=valkey-server
+	dh_installsystemd --no-enable --no-start -pvalkey-server --name=valkey-server@
+	dh_installsystemd --no-enable --no-start -pvalkey-sentinel --name=valkey-sentinel
+	dh_installsystemd --no-enable --no-start -pvalkey-sentinel --name=valkey-sentinel@
 
 override_dh_builddeb:
 	dh_builddeb -- -Zxz
