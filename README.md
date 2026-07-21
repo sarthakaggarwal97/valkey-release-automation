@@ -1,5 +1,5 @@
 # Overview
-This repository automates all the post-release processes for a new Valkey version release. The tasks undertaken by the this bot include building the official binaries and uploading them to the S3 bucket, updating the valkey-hashes repository, opening a PR on the valkey-container, and finally updating the valkey.io website with a download page for a new version.
+This repository automates all the post-release processes for a new Valkey version release. The tasks undertaken by the this bot include building the official binaries and uploading them to the S3 bucket, updating the valkey-hashes repository, opening a PR on the valkey-container, updating the valkey-doc repository, and updating the valkey.io website with a download page for the new version. For major/minor releases, a documentation PR is opened on valkey-doc. For patch releases, a lightweight git tag is created in valkey-doc pointing at the previous patch version's tag (docs are not versioned per patch, but tags are needed for reproducible builds).
 
 Here is a diagram that depicts the automated release process: <br>
 ![alt text](documents/Diagram.png)

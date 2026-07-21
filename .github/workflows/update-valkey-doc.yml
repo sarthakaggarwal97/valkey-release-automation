@@ -21,16 +21,21 @@ jobs:
           
           if [[ "$VERSION" == *"-rc"* ]]; then
             echo "is_major_minor=false" >> $GITHUB_OUTPUT
+            echo "is_patch=false" >> $GITHUB_OUTPUT
           elif [[ "$PATCH" != "0" ]]; then
             echo "is_major_minor=false" >> $GITHUB_OUTPUT
+            echo "is_patch=true" >> $GITHUB_OUTPUT
+            PREV_PATCH=$((PATCH - 1))
+            echo "previous_patch_version=${MINOR_VERSION}.${PREV_PATCH}" >> $GITHUB_OUTPUT
           else
             echo "is_major_minor=true" >> $GITHUB_OUTPUT
+            echo "is_patch=false" >> $GITHUB_OUTPUT
           fi
           
           echo "minor_version=$MINOR_VERSION" >> $GITHUB_OUTPUT
 
       - name: Generate token
-        if: steps.check-release.outputs.is_major_minor == 'true' && github.repository_owner == 'valkey-io'
+        if: (steps.check-release.outputs.is_major_minor == 'true' || steps.check-release.outputs.is_patch == 'true') && github.repository_owner == 'valkey-io'
         id: generate-token
         uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547 # v1.12.0
         with:
@@ -38,6 +43,57 @@ jobs:
           private-key: ${{ secrets.VALKEYRIE_BOT_PRIVATE_KEY }}
           owner: ${{ github.repository_owner }}
           repositories: valkey-doc
+
+      - name: Checkout valkey-doc for patch
+        if: steps.check-release.outputs.is_patch == 'true'
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          repository: ${{ github.repository_owner }}/valkey-doc
+          token: ${{ github.repository_owner == 'valkey-io' && steps.generate-token.outputs.token || secrets.AUTOMATION_PAT }}
+          path: valkey-doc
+          # Full history: fetch-tags with the default shallow depth only follows
+          # tags reachable from the default branch tip, so older-line tags
+          # (e.g. 8.1.x when main is at 9.x) would be missing.
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Create tag in valkey-doc
+        if: steps.check-release.outputs.is_patch == 'true'
+        working-directory: valkey-doc
+        run: |
+          VERSION="${{ inputs.version }}"
+          PREVIOUS="${{ steps.check-release.outputs.previous_patch_version }}"
+
+          # Verify the previous tag exists
+          if ! git rev-parse "refs/tags/${PREVIOUS}" >/dev/null 2>&1; then
+            echo "::error::Previous tag '${PREVIOUS}' does not exist in valkey-doc. Cannot create tag '${VERSION}'."
+            exit 1
+          fi
+
+          # Peel to the commit: previous tags may be annotated, and tagging the
+          # tag object would not put the new tag directly on the same commit.
+          EXPECTED=$(git rev-parse "${PREVIOUS}^{commit}")
+
+          # If the tag already exists remotely, verify it points at the expected
+          # commit (peeled ^{} line for annotated tags, plain line for lightweight).
+          REMOTE=$(git ls-remote origin "refs/tags/${VERSION}" "refs/tags/${VERSION}^{}")
+          if [[ -n "$REMOTE" ]]; then
+            EXISTING=$(echo "$REMOTE" | awk -v ref="refs/tags/${VERSION}^{}" '$2 == ref {print $1}')
+            if [[ -z "$EXISTING" ]]; then
+              EXISTING=$(echo "$REMOTE" | awk -v ref="refs/tags/${VERSION}" '$2 == ref {print $1}')
+            fi
+            if [[ "$EXISTING" == "$EXPECTED" ]]; then
+              echo "Tag '${VERSION}' already exists at expected commit ${EXPECTED}. Nothing to do."
+              exit 0
+            fi
+            echo "::error::Tag '${VERSION}' already exists but points at ${EXISTING}, expected ${EXPECTED} (commit of '${PREVIOUS}')."
+            exit 1
+          fi
+
+          # Create lightweight tag pointing at the same commit as the previous tag
+          git tag "${VERSION}" "${EXPECTED}"
+          git push origin "refs/tags/${VERSION}"
+          echo "Successfully created and pushed tag '${VERSION}' pointing at ${EXPECTED} (commit of '${PREVIOUS}')."
 
       - name: Checkout valkey
         if: steps.check-release.outputs.is_major_minor == 'true'
