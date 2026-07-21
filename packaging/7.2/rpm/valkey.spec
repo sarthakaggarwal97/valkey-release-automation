@@ -256,7 +256,7 @@ popd
 %endif
 
 %install
-make install PREFIX=%{buildroot}%{_prefix}
+make install %{install_flags}
 
 %if %{with docs}
 pushd %{name}-doc-%{doc_version}

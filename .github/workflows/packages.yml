@@ -46,52 +46,102 @@ jobs:
             packaging/*/debian/changelog
           sparse-checkout-cone-mode: false
 
-      - name: Validate version and derive packaging directory
+      - name: Validate versions and derive build list
         id: derive
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           VERSION="${{ inputs.version }}"
 
-          # For pull_request triggers, detect version from the latest packaging changelog
-          if [ -z "$VERSION" ]; then
-            LATEST_DIR=$(ls -d packaging/[0-9]*/ 2>/dev/null | sort -V | tail -1)
-            if [ -n "$LATEST_DIR" ] && [ -f "${LATEST_DIR}debian/changelog" ]; then
-              VERSION=$(head -1 "${LATEST_DIR}debian/changelog" | sed 's/.*(\([^)]*\)).*/\1/' | sed 's/-.*//')
-              echo "No version input — detected ${VERSION} from ${LATEST_DIR}debian/changelog"
-            else
-              VERSION="8.1.1"
-              echo "No version input and no changelog found — using fallback ${VERSION}"
+          # Resolve the newest release tag for a MAJOR.MINOR line from the
+          # valkey repo, falling back to the committed changelog.
+          resolve_line_version() {
+            local line="$1" v=""
+            v=$(gh api "repos/valkey-io/valkey/git/matching-refs/tags/${line}." --jq '.[].ref' 2>/dev/null \
+              | sed 's|refs/tags/||' \
+              | grep -E "^${line//./\\.}\.[0-9]+$" \
+              | sort -V | tail -1) || true
+            if [ -n "$v" ]; then
+              echo "Resolved latest ${line}.x release tag: ${v}" >&2
+            elif [ -f "packaging/${line}/debian/changelog" ]; then
+              v=$(head -1 "packaging/${line}/debian/changelog" | sed 's/.*(\([^)]*\)).*/\1/' | sed 's/-.*//')
+              echo "Tag lookup failed for ${line}: detected ${v} from packaging/${line}/debian/changelog" >&2
+            fi
+            echo "$v"
+          }
+
+          VERSIONS=""
+          if [ -n "$VERSION" ]; then
+            # Explicit version input (release dispatch / workflow_call)
+            VERSIONS="$VERSION"
+          else
+            # pull_request trigger: build every packaging line the PR modifies,
+            # falling back to the latest packaging line when none are touched.
+            CHANGED_LINES=""
+            if [ "${{ github.event_name }}" = "pull_request" ]; then
+              CHANGED_LINES=$(gh api "repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/files" \
+                --paginate --jq '.[].filename' \
+                | sed -n 's|^packaging/\([0-9][0-9]*\.[0-9][0-9]*\)/.*|\1|p' | sort -Vu)
+              if [ -n "$CHANGED_LINES" ]; then
+                echo "PR modifies packaging line(s): $(echo $CHANGED_LINES | tr '\n' ' ')"
+              fi
+            fi
+            if [ -z "$CHANGED_LINES" ]; then
+              CHANGED_LINES=$(ls -d packaging/[0-9]*/ 2>/dev/null | sort -V | tail -1 | sed 's|packaging/||; s|/||')
+            fi
+            for LINE in $CHANGED_LINES; do
+              V=$(resolve_line_version "$LINE")
+              if [ -n "$V" ]; then
+                VERSIONS="${VERSIONS}${VERSIONS:+ }${V}"
+              else
+                echo "WARNING: could not resolve a version for packaging line ${LINE}, skipping"
+              fi
+            done
+            if [ -z "$VERSIONS" ]; then
+              VERSIONS="8.1.1"
+              echo "No version resolved from any source: using fallback ${VERSIONS}"
             fi
           fi
 
           # Validate semver format: x.y.z or x.y.z-rcN
-          if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-rc[0-9]+)?$ ]]; then
-            echo "ERROR: Invalid version format '${VERSION}'."
-            echo "Expected: x.y.z or x.y.z-rcN (e.g., 9.0.3, 8.1.0-rc1)"
-            exit 1
-          fi
+          for V in $VERSIONS; do
+            if [[ ! "$V" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-rc[0-9]+)?$ ]]; then
+              echo "ERROR: Invalid version format '${V}'."
+              echo "Expected: x.y.z or x.y.z-rcN (e.g., 9.0.3, 8.1.0-rc1)"
+              exit 1
+            fi
+          done
 
-          VERSION_WITHOUT_RC="${VERSION%%-*}"
+          # versions: JSON array consumed as a matrix axis by build/test jobs.
+          # version: first (primary) version, kept for publish/summary steps
+          # which only run on single-version release builds.
+          VERSIONS_JSON=$(printf '%s\n' $VERSIONS | jq -R . | jq -cs .)
+          PRIMARY="${VERSIONS%% *}"
+          VERSION_WITHOUT_RC="${PRIMARY%%-*}"
           MAJOR="${VERSION_WITHOUT_RC%%.*}"
           MINOR_PART="${VERSION_WITHOUT_RC#*.}"
           MINOR="${MINOR_PART%%.*}"
 
-          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "versions=${VERSIONS_JSON}" >> "$GITHUB_OUTPUT"
+          echo "version=${PRIMARY}" >> "$GITHUB_OUTPUT"
           echo "packaging_dir=${MAJOR}.${MINOR}" >> "$GITHUB_OUTPUT"
-          echo "Version: ${VERSION}"
-          echo "Packaging directory: ${MAJOR}.${MINOR}"
+          echo "Versions: ${VERSIONS_JSON}"
+          echo "Primary version: ${PRIMARY}"
 
       - name: Generate platform matrices
         id: matrix
+        env:
+          VERSIONS_JSON: ${{ steps.derive.outputs.versions }}
         run: |
           CONFIG=".github/package-platforms.json"
-          echo "rpm=$(jq -c '.rpm' "$CONFIG")" >> "$GITHUB_OUTPUT"
-          echo "deb=$(jq -c '.deb' "$CONFIG")" >> "$GITHUB_OUTPUT"
+          echo "rpm=$(jq -c --argjson vs "$VERSIONS_JSON" '.rpm + {version: $vs}' "$CONFIG")" >> "$GITHUB_OUTPUT"
+          echo "deb=$(jq -c --argjson vs "$VERSIONS_JSON" '.deb + {version: $vs}' "$CONFIG")" >> "$GITHUB_OUTPUT"
 
   ############################################################################
   # RPM Builds
   ############################################################################
   build-rpm:
-    name: RPM · ${{ matrix.platform.name }} (${{ matrix.arch }}) · v${{ needs.process-inputs.outputs.version }}
+    name: RPM · ${{ matrix.platform.name }} (${{ matrix.arch }}) · v${{ matrix.version }}
     needs: process-inputs
     runs-on: ${{ matrix.arch == 'aarch64' && 'ubuntu-24.04-arm' || 'ubuntu-latest' }}
 
@@ -106,7 +156,9 @@ jobs:
       - name: Build RPM in container
         run: |
           DOCKER_PLATFORM="linux/${{ matrix.arch == 'aarch64' && 'arm64' || 'amd64' }}"
-          VALKEY_VERSION="${{ needs.process-inputs.outputs.version }}"
+          VALKEY_VERSION="${{ matrix.version }}"
+          PACKAGING_DIR="${VALKEY_VERSION%%-*}"
+          PACKAGING_DIR="${PACKAGING_DIR%.*}"
 
           docker run --rm \
             --platform="$DOCKER_PLATFORM" \
@@ -117,7 +169,7 @@ jobs:
             -e EXPECTED_ARCH="${{ matrix.arch }}" \
             -v "${{ github.workspace }}/scripts:/scripts:ro" \
             -v "${{ github.workspace }}/packaging/common/rpm:/packaging-common:ro" \
-            -v "${{ github.workspace }}/packaging/${{ needs.process-inputs.outputs.packaging_dir }}/rpm:/packaging-override:ro" \
+            -v "${{ github.workspace }}/packaging/${PACKAGING_DIR}/rpm:/packaging-override:ro" \
             -v "${{ github.workspace }}/packaging/templates/rpm:/packaging-templates:ro" \
             -v "$(pwd)/output:/output" \
             ${{ matrix.platform.container }} \
@@ -131,7 +183,7 @@ jobs:
       - name: Upload RPM artifacts
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: valkey-rpms-${{ matrix.platform.id }}-${{ matrix.arch }}
+          name: valkey-rpms-${{ matrix.platform.id }}-${{ matrix.arch }}${{ github.event_name == 'pull_request' && format('-v{0}', matrix.version) || '' }}
           path: output/*.rpm
           retention-days: 30
 
@@ -139,7 +191,7 @@ jobs:
   # DEB Builds
   ############################################################################
   build-deb:
-    name: DEB · ${{ matrix.platform.name }} (${{ matrix.arch }}) · v${{ needs.process-inputs.outputs.version }}
+    name: DEB · ${{ matrix.platform.name }} (${{ matrix.arch }}) · v${{ matrix.version }}
     needs: process-inputs
     runs-on: ${{ matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-latest' }}
 
@@ -160,7 +212,9 @@ jobs:
       - name: Build DEB in container
         run: |
           DOCKER_PLATFORM="linux/${{ matrix.arch }}"
-          VALKEY_VERSION="${{ needs.process-inputs.outputs.version }}"
+          VALKEY_VERSION="${{ matrix.version }}"
+          PACKAGING_DIR="${VALKEY_VERSION%%-*}"
+          PACKAGING_DIR="${PACKAGING_DIR%.*}"
 
           docker run --rm \
             --platform="$DOCKER_PLATFORM" \
@@ -171,7 +225,7 @@ jobs:
             -e DEBIAN_FRONTEND=noninteractive \
             -v "${{ github.workspace }}/scripts:/scripts:ro" \
             -v "${{ github.workspace }}/packaging/common/debian:/packaging-common:ro" \
-            -v "${{ github.workspace }}/packaging/${{ needs.process-inputs.outputs.packaging_dir }}/debian:/packaging-override:ro" \
+            -v "${{ github.workspace }}/packaging/${PACKAGING_DIR}/debian:/packaging-override:ro" \
             -v "${{ github.workspace }}/packaging/templates/debian:/packaging-templates:ro" \
             -v "$(pwd)/output:/output" \
             ${{ matrix.platform.container }} \
@@ -194,7 +248,7 @@ jobs:
       - name: Upload DEB artifacts
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: valkey-debs-${{ matrix.platform.id }}-${{ matrix.arch }}
+          name: valkey-debs-${{ matrix.platform.id }}-${{ matrix.arch }}${{ github.event_name == 'pull_request' && format('-v{0}', matrix.version) || '' }}
           path: |
             output/*.deb
             output/*.ddeb
@@ -206,7 +260,7 @@ jobs:
   # RPM Package Tests (all platforms)
   ############################################################################
   test-rpm:
-    name: Test RPM · ${{ matrix.platform.name }} (${{ matrix.arch }}) · v${{ needs.process-inputs.outputs.version }}
+    name: Test RPM · ${{ matrix.platform.name }} (${{ matrix.arch }}) · v${{ matrix.version }}
     needs: [process-inputs, build-rpm]
     runs-on: ${{ matrix.arch == 'aarch64' && 'ubuntu-24.04-arm' || 'ubuntu-latest' }}
 
@@ -221,7 +275,7 @@ jobs:
       - name: Download RPM artifacts
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
-          name: valkey-rpms-${{ matrix.platform.id }}-${{ matrix.arch }}
+          name: valkey-rpms-${{ matrix.platform.id }}-${{ matrix.arch }}${{ github.event_name == 'pull_request' && format('-v{0}', matrix.version) || '' }}
           path: packages
 
       - name: List downloaded packages
@@ -232,7 +286,7 @@ jobs:
       - name: Run package tests in Docker
         run: |
           DOCKER_PLATFORM="linux/${{ matrix.arch == 'aarch64' && 'arm64' || 'amd64' }}"
-          VALKEY_VERSION="${{ needs.process-inputs.outputs.version }}"
+          VALKEY_VERSION="${{ matrix.version }}"
           CONTAINER_NAME="test-rpm-${{ matrix.platform.id }}-${{ matrix.arch }}"
 
           # Phase 1: Install systemd in a plain container.
@@ -337,7 +391,7 @@ jobs:
   # DEB Package Tests (all platforms)
   ############################################################################
   test-deb:
-    name: Test DEB · ${{ matrix.platform.name }} (${{ matrix.arch }}) · v${{ needs.process-inputs.outputs.version }}
+    name: Test DEB · ${{ matrix.platform.name }} (${{ matrix.arch }}) · v${{ matrix.version }}
     needs: [process-inputs, build-deb]
     runs-on: ${{ matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-latest' }}
 
@@ -352,7 +406,7 @@ jobs:
       - name: Download DEB artifacts
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
-          name: valkey-debs-${{ matrix.platform.id }}-${{ matrix.arch }}
+          name: valkey-debs-${{ matrix.platform.id }}-${{ matrix.arch }}${{ github.event_name == 'pull_request' && format('-v{0}', matrix.version) || '' }}
           path: packages
 
       - name: List downloaded packages
@@ -363,7 +417,7 @@ jobs:
       - name: Run package tests in Docker
         run: |
           DOCKER_PLATFORM="linux/${{ matrix.arch }}"
-          VALKEY_VERSION="${{ needs.process-inputs.outputs.version }}"
+          VALKEY_VERSION="${{ matrix.version }}"
           CONTAINER_NAME="test-deb-${{ matrix.platform.id }}-${{ matrix.arch }}"
 
           # Phase 1: Install systemd prerequisites in a plain container.
@@ -667,11 +721,13 @@ jobs:
           for dir in all-packages/valkey-rpms-*/; do
             if [ -d "$dir" ]; then
               artifact=$(basename "$dir" | sed 's/valkey-rpms-//')
-              arch=$(echo "$artifact" | rev | cut -d'-' -f1 | rev)
-              platform=$(echo "$artifact" | rev | cut -d'-' -f2- | rev)
+              version=$(echo "$artifact" | grep -oE 'v[0-9]+\.[0-9]+\.[0-9]+(-rc[0-9]+)?$' | sed 's/^v//')
+              rest=$(echo "$artifact" | sed -E 's/-v[0-9]+\.[0-9]+\.[0-9]+(-rc[0-9]+)?$//')
+              arch=$(echo "$rest" | rev | cut -d'-' -f1 | rev)
+              platform=$(echo "$rest" | rev | cut -d'-' -f2- | rev)
               count=$(find "$dir" -name "*.rpm" -type f | wc -l)
               size=$(du -sh "$dir" | cut -f1)
-              echo "| $platform | $arch | $VERSION | $count | $size |" >> $GITHUB_STEP_SUMMARY
+              echo "| $platform | $arch | ${version:-$VERSION} | $count | $size |" >> $GITHUB_STEP_SUMMARY
             fi
           done
 
@@ -684,11 +740,13 @@ jobs:
           for dir in all-packages/valkey-debs-*/; do
             if [ -d "$dir" ]; then
               artifact=$(basename "$dir" | sed 's/valkey-debs-//')
-              arch=$(echo "$artifact" | rev | cut -d'-' -f1 | rev)
-              platform=$(echo "$artifact" | rev | cut -d'-' -f2- | rev)
+              version=$(echo "$artifact" | grep -oE 'v[0-9]+\.[0-9]+\.[0-9]+(-rc[0-9]+)?$' | sed 's/^v//')
+              rest=$(echo "$artifact" | sed -E 's/-v[0-9]+\.[0-9]+\.[0-9]+(-rc[0-9]+)?$//')
+              arch=$(echo "$rest" | rev | cut -d'-' -f1 | rev)
+              platform=$(echo "$rest" | rev | cut -d'-' -f2- | rev)
               count=$(find "$dir" -name "*.deb" -type f | wc -l)
               size=$(du -sh "$dir" | cut -f1)
-              echo "| $platform | $arch | $VERSION | $count | $size |" >> $GITHUB_STEP_SUMMARY
+              echo "| $platform | $arch | ${version:-$VERSION} | $count | $size |" >> $GITHUB_STEP_SUMMARY
             fi
           done
 
