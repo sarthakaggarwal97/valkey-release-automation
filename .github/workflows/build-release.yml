@@ -1,4 +1,7 @@
 name: Build Release New Version
+# The run-name embeds the version: it is the deterministic correlation
+# marker release observers match on (run metadata does not carry inputs).
+run-name: "Build Release ${{ github.event.client_payload.version || inputs.version || 'push' }} (${{ github.event.client_payload.environment || inputs.environment || 'dev' }})"
 
 on:
   repository_dispatch:
@@ -203,31 +206,6 @@ jobs:
       try_valkey_uploaded: ${{ needs.update-try-valkey.outputs.try_valkey_uploaded }}
     secrets: inherit
 
-  trigger-valkey-bundle:
-    needs:
-      - process-inputs
-      - update-valkey-container
-    runs-on: ubuntu-latest
-    steps:
-      - name: Generate token
-        if: needs.process-inputs.outputs.trigger_bundle == 'true' && github.repository_owner == 'valkey-io'
-        id: generate-token
-        uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547 # v1.12.0
-        with:
-          app-id: ${{ secrets.VALKEYRIE_BOT_APP_ID }}
-          private-key: ${{ secrets.VALKEYRIE_BOT_PRIVATE_KEY }}
-          owner: ${{ github.repository_owner }}
-          repositories: valkey-bundle
-
-      - name: Trigger Valkey Bundle Update
-        if: needs.process-inputs.outputs.trigger_bundle == 'true'
-        uses: peter-evans/repository-dispatch@ff45666b9427631e3450c54a1bcbee4d9ff4d7c0 # Version 3
-        with:
-          token: ${{ github.repository_owner == 'valkey-io' && steps.generate-token.outputs.token || secrets.AUTOMATION_PAT }}
-          repository: ${{ github.repository_owner }}/valkey-bundle
-          event-type: valkey-release
-          client-payload: >
-            {
-              "version": "${{ needs.process-inputs.outputs.version }}",
-              "component": "valkey"
-            }
+  # The early Bundle trigger is removed: Bundle work must start only
+  # after the Valkey base images are public. The release controller
+  # (valkey-ci-agent) dispatches valkey-bundle's update hook then.

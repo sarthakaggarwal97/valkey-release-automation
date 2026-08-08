@@ -7,12 +7,32 @@ on:
         description: 'Valkey version to build packages for (e.g., 9.0.3)'
         required: true
         type: string
+      source_sha:
+        description: 'Exact valkey commit to build from (qualification); empty uses the tag/branch archive'
+        required: false
+        type: string
+        default: ''
+      publish:
+        description: 'Publish packages to S3/pages after tests pass'
+        required: false
+        type: boolean
+        default: true
   workflow_dispatch:
     inputs:
       version:
         description: 'Valkey version to build packages for (e.g., 9.0.3)'
         required: true
         type: string
+      source_sha:
+        description: 'Exact valkey commit to build from (qualification); empty uses the tag/branch archive'
+        required: false
+        type: string
+        default: ''
+      publish:
+        description: 'Publish packages to S3/pages after tests pass'
+        required: false
+        type: boolean
+        default: true
   pull_request:
     paths:
       - '.github/workflows/packages.yml'
@@ -31,6 +51,8 @@ jobs:
   ############################################################################
   process-inputs:
     name: Process Inputs
+    permissions:
+      contents: read
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.derive.outputs.version }}
@@ -143,6 +165,8 @@ jobs:
   build-rpm:
     name: RPM · ${{ matrix.platform.name }} (${{ matrix.arch }}) · v${{ matrix.version }}
     needs: process-inputs
+    permissions:
+      contents: read
     runs-on: ${{ matrix.arch == 'aarch64' && 'ubuntu-24.04-arm' || 'ubuntu-latest' }}
 
     strategy:
@@ -152,6 +176,20 @@ jobs:
     steps:
       - name: Checkout packaging repo
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Fetch source at exact commit (qualification)
+        if: inputs.source_sha != ''
+        run: |
+          set -euo pipefail
+          SHA="${{ inputs.source_sha }}"
+          [[ "$SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "source_sha must be a full 40-char SHA"; exit 1; }
+          VERSION="${{ matrix.version }}"
+          mkdir -p source /tmp/repack
+          wget -q "https://github.com/${{ github.repository_owner }}/valkey/archive/${SHA}.tar.gz" -O /tmp/src.tar.gz
+          tar xzf /tmp/src.tar.gz -C /tmp/repack
+          mv "/tmp/repack/valkey-${SHA}" "/tmp/repack/valkey-${VERSION}"
+          tar czf source/valkey-src.tar.gz -C /tmp/repack "valkey-${VERSION}"
+          rm -rf /tmp/repack /tmp/src.tar.gz
 
       - name: Build RPM in container
         run: |
@@ -172,6 +210,8 @@ jobs:
             -v "${{ github.workspace }}/packaging/${PACKAGING_DIR}/rpm:/packaging-override:ro" \
             -v "${{ github.workspace }}/packaging/templates/rpm:/packaging-templates:ro" \
             -v "$(pwd)/output:/output" \
+            -v "${{ github.workspace }}/source:/source:ro" \
+            -e VALKEY_SOURCE_TARBALL="${{ inputs.source_sha != '' && '/source/valkey-src.tar.gz' || '' }}" \
             ${{ matrix.platform.container }} \
             bash /scripts/build-rpm.sh
 
@@ -193,6 +233,8 @@ jobs:
   build-deb:
     name: DEB · ${{ matrix.platform.name }} (${{ matrix.arch }}) · v${{ matrix.version }}
     needs: process-inputs
+    permissions:
+      contents: read
     runs-on: ${{ matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-latest' }}
 
     strategy:
@@ -208,6 +250,20 @@ jobs:
         uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3.7.0
         with:
           platforms: arm64
+
+      - name: Fetch source at exact commit (qualification)
+        if: inputs.source_sha != ''
+        run: |
+          set -euo pipefail
+          SHA="${{ inputs.source_sha }}"
+          [[ "$SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "source_sha must be a full 40-char SHA"; exit 1; }
+          VERSION="${{ matrix.version }}"
+          mkdir -p source /tmp/repack
+          wget -q "https://github.com/${{ github.repository_owner }}/valkey/archive/${SHA}.tar.gz" -O /tmp/src.tar.gz
+          tar xzf /tmp/src.tar.gz -C /tmp/repack
+          mv "/tmp/repack/valkey-${SHA}" "/tmp/repack/valkey-${VERSION}"
+          tar czf source/valkey-src.tar.gz -C /tmp/repack "valkey-${VERSION}"
+          rm -rf /tmp/repack /tmp/src.tar.gz
 
       - name: Build DEB in container
         run: |
@@ -228,6 +284,8 @@ jobs:
             -v "${{ github.workspace }}/packaging/${PACKAGING_DIR}/debian:/packaging-override:ro" \
             -v "${{ github.workspace }}/packaging/templates/debian:/packaging-templates:ro" \
             -v "$(pwd)/output:/output" \
+            -v "${{ github.workspace }}/source:/source:ro" \
+            -e VALKEY_SOURCE_TARBALL="${{ inputs.source_sha != '' && '/source/valkey-src.tar.gz' || '' }}" \
             ${{ matrix.platform.container }} \
             bash /scripts/build-deb.sh
 
@@ -262,6 +320,8 @@ jobs:
   test-rpm:
     name: Test RPM · ${{ matrix.platform.name }} (${{ matrix.arch }}) · v${{ matrix.version }}
     needs: [process-inputs, build-rpm]
+    permissions:
+      contents: read
     runs-on: ${{ matrix.arch == 'aarch64' && 'ubuntu-24.04-arm' || 'ubuntu-latest' }}
 
     strategy:
@@ -393,6 +453,8 @@ jobs:
   test-deb:
     name: Test DEB · ${{ matrix.platform.name }} (${{ matrix.arch }}) · v${{ matrix.version }}
     needs: [process-inputs, build-deb]
+    permissions:
+      contents: read
     runs-on: ${{ matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-latest' }}
 
     strategy:
@@ -504,7 +566,8 @@ jobs:
     name: Publish to S3
     needs: [process-inputs, build-rpm, build-deb, test-rpm, test-deb]
     runs-on: ubuntu-latest
-    if: success() && github.event_name != 'pull_request'
+    # A qualification run (publish=false) must produce no public write.
+    if: success() && github.event_name != 'pull_request' && inputs.publish != false
     permissions:
       id-token: write
       contents: read
@@ -551,7 +614,8 @@ jobs:
     name: Deploy Pages
     needs: [process-inputs, publish-to-s3]
     runs-on: ubuntu-latest
-    if: success() && github.event_name != 'pull_request'
+    # A qualification run (publish=false) must produce no public write.
+    if: success() && github.event_name != 'pull_request' && inputs.publish != false
     permissions:
       id-token: write
       contents: write
@@ -618,6 +682,8 @@ jobs:
   build-summary:
     name: Build Summary
     needs: [process-inputs, build-rpm, build-deb, test-rpm, test-deb, publish-to-s3, deploy-pages]
+    permissions:
+      contents: read
     runs-on: ubuntu-latest
     if: always()
 

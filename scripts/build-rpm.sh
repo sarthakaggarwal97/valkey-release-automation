@@ -177,6 +177,14 @@ echo "::group::Download Valkey source"
 
 cd $BUILD_ROOT/SOURCES
 
+# Qualification runs build from an exact commit: when the caller mounts a
+# source tarball (VALKEY_SOURCE_TARBALL), use it instead of downloading a
+# tag/branch archive, so the build cannot drift from the candidate SHA.
+if [ -n "${VALKEY_SOURCE_TARBALL:-}" ] && [ -f "${VALKEY_SOURCE_TARBALL}" ]; then
+  echo "Using mounted source tarball ${VALKEY_SOURCE_TARBALL}"
+  cp "${VALKEY_SOURCE_TARBALL}" "valkey-${VALKEY_VERSION}.tar.gz"
+fi
+
 # Download main source if not present
 if [ ! -f "valkey-${VALKEY_VERSION}.tar.gz" ]; then
   echo "Downloading Valkey ${VALKEY_VERSION}..."

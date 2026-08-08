@@ -109,6 +109,13 @@ echo "✓ Found packaging files at: $PACKAGING_DIR"
 
 # Download Valkey source (skip if already present, e.g. pre-mounted)
 cd /root
+# Qualification: use the mounted exact-commit source tarball when provided
+# (see build-rpm.sh for rationale).
+if [ -n "${VALKEY_SOURCE_TARBALL:-}" ] && [ -f "${VALKEY_SOURCE_TARBALL}" ]; then
+  echo "Using mounted source tarball ${VALKEY_SOURCE_TARBALL}"
+  cp "${VALKEY_SOURCE_TARBALL}" "valkey_${VALKEY_VERSION}.orig.tar.gz"
+fi
+
 if [ ! -f "valkey_${VALKEY_VERSION}.orig.tar.gz" ]; then
   echo "Downloading Valkey ${VALKEY_VERSION}..."
   if ! wget -q https://github.com/valkey-io/valkey/archive/${VALKEY_VERSION}.tar.gz -O valkey_${VALKEY_VERSION}.orig.tar.gz; then

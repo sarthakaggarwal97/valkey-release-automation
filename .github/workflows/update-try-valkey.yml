@@ -202,3 +202,21 @@ jobs:
                     
           echo "Files uploaded successfully to S3"
           echo "files_uploaded=true" >> $GITHUB_OUTPUT
+
+      - name: Write upload sentinel
+        if: steps.upload-s3.outputs.files_uploaded == 'true'
+        run: |
+          mkdir -p /tmp/try-valkey-sentinel
+          echo "${{ inputs.version }}" > /tmp/try-valkey-sentinel/uploaded
+
+      # Native evidence that the upload actually happened: the wrapper job
+      # succeeds even when applicability logic skips the upload, so release
+      # observers must not treat job success as an upload. This artifact
+      # exists if and only if the S3 sync ran.
+      - name: Upload sentinel artifact
+        if: steps.upload-s3.outputs.files_uploaded == 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: try-valkey-uploaded-${{ inputs.version }}
+          path: /tmp/try-valkey-sentinel/uploaded
+          retention-days: 90

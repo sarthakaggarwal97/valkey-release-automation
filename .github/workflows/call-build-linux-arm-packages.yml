@@ -15,17 +15,29 @@ on:
         description: The AWS region to push packages into.
         type: string
         required: true
+      source_sha:
+        description: Exact valkey commit to build from (qualification); empty builds inputs.version.
+        type: string
+        required: false
+        default: ''
+      publish:
+        description: Upload the tarballs to S3 (false = qualification, artifacts only).
+        type: boolean
+        required: false
+        default: true
     secrets:
       bucket_name:
         description: The S3 bucket to push packages into.
-        required: true
+        required: false
       role_to_assume:
         description: The role to assume for the S3 bucket.
-        required: true
+        required: false
 
-permissions:
-  id-token: write
-  contents: read
+# No workflow-level permissions: a called workflow may not exceed its
+# caller's grant, so permissions flow from the caller. build-release.yml
+# grants id-token:write (OIDC for S3) for production builds; the
+# qualification caller grants contents:read only, so a qualification
+# build of unreleased code can never mint an OIDC token.
 
 jobs:
   build-valkey:
@@ -40,9 +52,20 @@ jobs:
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           repository: ${{ github.repository_owner }}/valkey
-          ref: ${{ inputs.version }}
+          ref: ${{ inputs.source_sha != '' && inputs.source_sha || inputs.version }}
+
+      - name: Verify checkout matches the requested commit
+        if: inputs.source_sha != ''
+        run: |
+          set -euo pipefail
+          HEAD_SHA=$(git rev-parse HEAD)
+          if [[ "$HEAD_SHA" != "${{ inputs.source_sha }}" ]]; then
+            echo "Checkout is at $HEAD_SHA, not the requested ${{ inputs.source_sha }}"
+            exit 1
+          fi
 
       - name: Configure AWS credentials
+        if: inputs.publish
         uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-region: ${{ inputs.region }}
@@ -84,4 +107,13 @@ jobs:
           cp -rfv $TAR_FILE_NAME.tar* packages-files/
           
       - name: Sync to S3
+        if: inputs.publish
         run: aws s3 sync packages-files s3://${{ secrets.bucket_name }}/releases/
+
+      - name: Upload qualification artifacts
+        if: ${{ !inputs.publish }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: qualify-${{ inputs.version }}-${{ matrix.distro.platform }}-${{ matrix.distro.arch }}
+          path: packages-files/
+          retention-days: 30
