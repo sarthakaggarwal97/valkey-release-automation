@@ -1,4 +1,9 @@
 name: Update Valkey Hashes
+# Security boundary: this workflow pushes to the valkey-hashes repository (a
+# production write). It is workflow_call ONLY and is reachable solely through
+# build-release.yml, which gates every production event shape through the
+# release-publish environment. Do NOT add a standalone workflow_dispatch trigger here
+# without gating it behind the release-publish environment.
 
 on:
   workflow_call:
@@ -13,23 +18,33 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Validate inputs
+        env:
+          VERSION: ${{ inputs.version }}
         run: |
-          if [[ ! "${{ inputs.version }}" =~ ^([0-9]+\.[0-9]+\.[0-9]+(-rc[0-9]+)?|unstable)$ ]]; then
-            echo "Invalid version format '${{ inputs.version }}'. Expected format: x.y.z or 'unstable'."
+          if [[ ! "$VERSION" =~ ^([0-9]+\.[0-9]+\.[0-9]+(-rc[0-9]+)?|unstable)$ ]]; then
+            echo "Invalid version format '$VERSION'. Expected format: x.y.z or 'unstable'."
             exit 1
           fi
 
       - name: Generate token
         id: generate-token
         if: github.repository_owner == 'valkey-io'
-        uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547 # v1.12.0
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
           app-id: ${{ secrets.VALKEYRIE_BOT_APP_ID }}
           private-key: ${{ secrets.VALKEYRIE_BOT_PRIVATE_KEY }}
           owner: ${{ github.repository_owner }}
           repositories: valkey-hashes
+          # Security: without explicit permission-* inputs the minted token
+          # inherits the App's FULL installation grant. This workflow only
+          # clones valkey-hashes and pushes a commit to its default branch:
+          # contents write covers the git fetch/push, and metadata read
+          # covers the repository lookup actions/checkout performs to
+          # resolve the default branch. Nothing else is granted.
+          permission-contents: write
+          permission-metadata: read
 
-      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           repository: ${{ github.repository_owner }}/valkey-hashes
           token: ${{ github.repository_owner == 'valkey-io' && steps.generate-token.outputs.token || secrets.AUTOMATION_PAT }}
@@ -48,29 +63,25 @@ jobs:
       - name: Update hash
         run: |
           set -e
-          VERSION=${{ inputs.version }}
           URL="https://github.com/valkey-io/valkey/archive/refs/tags/${VERSION}.tar.gz"
           FILENAME="valkey-${VERSION}.tar.gz"
           
-          # Download the tar.gz file
           wget -O "$FILENAME" "$URL" || { echo "Failed to download $URL"; exit 1; }
           
-          # Calculate SHA256 hash
           HASH=$(sha256sum "$FILENAME" | cut -d ' ' -f 1)
           
-          # Add hash to README if not already present
           if ! grep -q "$HASH $URL" README; then
             echo "hash $FILENAME sha256 $HASH $URL" >> README
             git config user.name "github-actions[bot]"
             git config user.email "github-actions[bot]@users.noreply.github.com"
             git add README
-            git commit -m "Update hash for ${{ inputs.version }}"
+            git commit -m "Update hash for $VERSION"
             git push origin HEAD
           else
             echo "Hash entry already exists in README. Skipping append."
           fi
           
-          # Clean up the downloaded file
           rm "$FILENAME"
         env:
+          VERSION: ${{ inputs.version }}
           GITHUB_TOKEN: ${{ github.repository_owner == 'valkey-io' && steps.generate-token.outputs.token || secrets.AUTOMATION_PAT }}
