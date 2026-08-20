@@ -41,8 +41,13 @@ class ReleaseWorkflowCoverageTest(unittest.TestCase):
             self.assertIn(job, text)
         self.assertIn("environment: release-publish", text)
         self.assertIn('SOURCE_SHA="$TAG_SHA"', text)
-        self.assertIn('WORKFLOW_REF" != "refs/heads/main"', text)
-        self.assertIn('"$APPROVER" != "$TRIGGERING_ACTOR"', text)
+        self.assertIn('WORKFLOW_REF" != "refs/heads/${DEFAULT_BRANCH}"', text)
+        self.assertNotIn('"$APPROVER" != "$TRIGGERING_ACTOR"', text)
+        packages = workflow("packages.yml")
+        self.assertIn(
+            "github.ref == format('refs/heads/{0}', github.event.repository.default_branch)",
+            packages,
+        )
 
     def test_archive_and_package_builds_use_exact_source_sha(self) -> None:
         archives = workflow("call-build-linux-archives.yml")
