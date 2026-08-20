@@ -97,8 +97,8 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
-          repository: ${{ inputs.automation_repo || github.repository }}
-          ref: ${{ inputs.automation_ref || github.workflow_sha }}
+          repository: ${{ inputs.automation_repo || job.workflow_repository }}
+          ref: ${{ inputs.automation_ref || job.workflow_sha }}
           persist-credentials: false
           sparse-checkout: |
             .github/package-platforms.json
@@ -221,8 +221,8 @@ jobs:
       - name: Checkout packaging repo
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
-          repository: ${{ inputs.automation_repo || github.repository }}
-          ref: ${{ inputs.automation_ref || github.workflow_sha }}
+          repository: ${{ inputs.automation_repo || job.workflow_repository }}
+          ref: ${{ inputs.automation_ref || job.workflow_sha }}
           persist-credentials: false
 
       - name: Fetch source at exact commit
@@ -317,8 +317,8 @@ jobs:
       - name: Checkout packaging repo
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
-          repository: ${{ inputs.automation_repo || github.repository }}
-          ref: ${{ inputs.automation_ref || github.workflow_sha }}
+          repository: ${{ inputs.automation_repo || job.workflow_repository }}
+          ref: ${{ inputs.automation_ref || job.workflow_sha }}
           persist-credentials: false
 
       - name: Set up QEMU for cross-platform builds
@@ -427,8 +427,8 @@ jobs:
       - name: Checkout repo
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
-          repository: ${{ inputs.automation_repo || github.repository }}
-          ref: ${{ inputs.automation_ref || github.workflow_sha }}
+          repository: ${{ inputs.automation_repo || job.workflow_repository }}
+          ref: ${{ inputs.automation_ref || job.workflow_sha }}
           persist-credentials: false
 
       - name: Download RPM artifacts
@@ -567,8 +567,8 @@ jobs:
       - name: Checkout repo
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
-          repository: ${{ inputs.automation_repo || github.repository }}
-          ref: ${{ inputs.automation_ref || github.workflow_sha }}
+          repository: ${{ inputs.automation_repo || job.workflow_repository }}
+          ref: ${{ inputs.automation_ref || job.workflow_sha }}
           persist-credentials: false
 
       - name: Download DEB artifacts
@@ -675,7 +675,8 @@ jobs:
     # publish=false and cannot reach either branch.
     if: >-
       ${{ !failure() && !cancelled() && inputs.publish == true &&
-          ((inputs.release_gate_passed == true && github.ref == 'refs/heads/main') ||
+          ((inputs.release_gate_passed == true &&
+            github.ref == format('refs/heads/{0}', github.event.repository.default_branch)) ||
            (github.event_name == 'workflow_dispatch' && needs.standalone-approval.result == 'success')) }}
     permissions:
       id-token: write
@@ -685,8 +686,8 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
-          repository: ${{ inputs.automation_repo || github.repository }}
-          ref: ${{ inputs.automation_ref || github.workflow_sha }}
+          repository: ${{ inputs.automation_repo || job.workflow_repository }}
+          ref: ${{ inputs.automation_ref || job.workflow_sha }}
           persist-credentials: false
 
       - name: Download all build artifacts
@@ -741,8 +742,8 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
-          repository: ${{ inputs.automation_repo || github.repository }}
-          ref: ${{ inputs.automation_ref || github.workflow_sha }}
+          repository: ${{ inputs.automation_repo || job.workflow_repository }}
+          ref: ${{ inputs.automation_ref || job.workflow_sha }}
           persist-credentials: false
 
       # No gh-pages checkout: publish-repos.sh creates the site directory and

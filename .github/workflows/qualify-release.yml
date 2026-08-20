@@ -42,9 +42,9 @@ on:
         default: ''
       automation_ref:
         description: >-
-          Exact ref containing the qualification implementation. When empty,
-          every checkout uses github.workflow_sha, the immutable commit from
-          which this reusable workflow was resolved.
+          Exact full SHA containing the qualification implementation. When empty,
+          validate-inputs records job.workflow_sha, the immutable commit that
+          defines the called workflow job, and propagates it to every checkout.
         required: false
         type: string
         default: ''
@@ -73,15 +73,31 @@ jobs:
     timeout-minutes: 5
     outputs:
       automation_sha: ${{ steps.revision.outputs.automation_sha }}
+      automation_repo: ${{ steps.revision.outputs.automation_repo }}
     steps:
       - name: Record immutable automation revision
         id: revision
         env:
-          AUTOMATION_SHA: ${{ github.workflow_sha }}
+          AUTOMATION_SHA: ${{ job.workflow_sha }}
+          AUTOMATION_REPO: ${{ job.workflow_repository }}
+          REQUESTED_REPO: ${{ inputs.automation_repo }}
+          REQUESTED_REF: ${{ inputs.automation_ref }}
         run: |
           set -euo pipefail
-          [[ "$AUTOMATION_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "invalid github.workflow_sha" >&2; exit 1; }
+          [[ "$AUTOMATION_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "invalid job.workflow_sha" >&2; exit 1; }
+          [[ "$AUTOMATION_REPO" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || { echo "invalid job.workflow_repository" >&2; exit 1; }
+          if [[ -n "$REQUESTED_REF" && ! "$REQUESTED_REF" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "automation_ref must be an immutable full SHA" >&2
+            exit 1
+          fi
+          if [[ -n "$REQUESTED_REPO" ]]; then
+            AUTOMATION_REPO="$REQUESTED_REPO"
+          fi
+          if [[ -n "$REQUESTED_REF" ]]; then
+            AUTOMATION_SHA="$REQUESTED_REF"
+          fi
           echo "automation_sha=$AUTOMATION_SHA" >> "$GITHUB_OUTPUT"
+          echo "automation_repo=$AUTOMATION_REPO" >> "$GITHUB_OUTPUT"
 
       - name: Validate version and SHA shapes
         env:
@@ -112,8 +128,8 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
-          repository: ${{ inputs.automation_repo || github.repository }}
-          ref: ${{ inputs.automation_ref || github.workflow_sha }}
+          repository: ${{ needs.validate-inputs.outputs.automation_repo }}
+          ref: ${{ needs.validate-inputs.outputs.automation_sha }}
           persist-credentials: false
 
       - name: Generate matrix
@@ -177,12 +193,13 @@ jobs:
       version: ${{ inputs.version }}
       source_sha: ${{ inputs.source_sha }}
       publish: false
-      automation_repo: ${{ inputs.automation_repo }}
-      automation_ref: ${{ inputs.automation_ref }}
+      automation_repo: ${{ needs.validate-inputs.outputs.automation_repo }}
+      automation_ref: ${{ needs.validate-inputs.outputs.automation_sha }}
 
   qualification-summary:
     name: Qualification summary
     needs:
+      - validate-inputs
       - generate-build-matrix
       - qualify-linux-x86-archives
       - qualify-linux-arm-archives
@@ -227,8 +244,8 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
-          repository: ${{ inputs.automation_repo || github.repository }}
-          ref: ${{ inputs.automation_ref || github.workflow_sha }}
+          repository: ${{ needs.validate-inputs.outputs.automation_repo }}
+          ref: ${{ needs.validate-inputs.outputs.automation_sha }}
           persist-credentials: false
           sparse-checkout: |
             .github/package-platforms.json

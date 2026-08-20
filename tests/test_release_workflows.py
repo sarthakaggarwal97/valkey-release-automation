@@ -43,8 +43,14 @@ class ReleaseWorkflowCoverageTest(unittest.TestCase):
             self.assertIn(job, text)
         self.assertIn("environment: release-publish", text)
         self.assertIn('SOURCE_SHA="$TAG_SHA"', text)
-        self.assertIn('WORKFLOW_REF" != "refs/heads/main"', text)
-        self.assertIn('"$APPROVER" != "$TRIGGERING_ACTOR"', text)
+        self.assertIn('Production automation is stale:', text)
+        self.assertIn('WORKFLOW_REF" != "refs/heads/${DEFAULT_BRANCH}"', text)
+        self.assertNotIn('"$APPROVER" != "$TRIGGERING_ACTOR"', text)
+        packages = workflow("packages.yml")
+        self.assertIn(
+            "github.ref == format('refs/heads/{0}', github.event.repository.default_branch)",
+            packages,
+        )
 
     def test_archive_and_package_builds_use_exact_source_sha(self) -> None:
         archives = workflow("call-build-linux-archives.yml")
@@ -88,21 +94,33 @@ class ReleaseWorkflowCoverageTest(unittest.TestCase):
         packages = workflow("packages.yml")
         self.assertIn("automation_repo:", qualification)
         self.assertIn("automation_ref:", qualification)
-        self.assertIn("automation_repo: ${{ inputs.automation_repo }}", qualification)
-        self.assertIn("automation_ref: ${{ inputs.automation_ref }}", qualification)
+        self.assertIn(
+            "automation_repo: ${{ needs.validate-inputs.outputs.automation_repo }}",
+            qualification,
+        )
+        self.assertIn(
+            "automation_ref: ${{ needs.validate-inputs.outputs.automation_sha }}",
+            qualification,
+        )
         checkout_count = packages.count("uses: actions/checkout@")
         self.assertGreater(checkout_count, 0)
         self.assertEqual(
-            packages.count("repository: ${{ inputs.automation_repo || github.repository }}"),
+            packages.count("ref: ${{ inputs.automation_ref || job.workflow_sha }}"),
             checkout_count,
         )
         self.assertEqual(
-            packages.count("ref: ${{ inputs.automation_ref || github.workflow_sha }}"),
+            packages.count("repository: ${{ inputs.automation_repo || job.workflow_repository }}"),
             checkout_count,
         )
-        self.assertIn("github.workflow_sha", qualification)
+        self.assertNotIn("github.workflow_sha", qualification)
+        self.assertNotIn("github.workflow_sha", packages)
+        self.assertIn("AUTOMATION_SHA: ${{ job.workflow_sha }}", qualification)
+        self.assertIn("AUTOMATION_REPO: ${{ job.workflow_repository }}", qualification)
+        self.assertIn("automation_ref must be an immutable full SHA", qualification)
         self.assertIn("automation_sha:", qualification)
         self.assertIn("value: ${{ jobs.validate-inputs.outputs.automation_sha }}", qualification)
+        self.assertIn("ref: ${{ needs.validate-inputs.outputs.automation_sha }}", qualification)
+        self.assertIn("automation_ref: ${{ needs.validate-inputs.outputs.automation_sha }}", qualification)
 
     def test_release_path_uses_one_automation_approval(self) -> None:
         build = workflow("build-release.yml")
