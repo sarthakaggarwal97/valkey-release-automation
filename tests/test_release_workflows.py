@@ -53,6 +53,8 @@ class ReleaseWorkflowCoverageTest(unittest.TestCase):
         self.assertIn("github.repository_owner == 'valkey-io'", text)
         self.assertIn("publish: ${{ github.repository_owner == 'valkey-io' }}", text)
         self.assertIn("official valkey-doc repository has no 8.0.11 predecessor tag", text)
+        self.assertIn("account has no valkey-hashes fork", text)
+        self.assertIn("account has no valkey-helm fork", text)
 
     def test_archive_and_package_builds_use_exact_source_sha(self) -> None:
         archives = workflow("call-build-linux-archives.yml")
@@ -94,6 +96,10 @@ class ReleaseWorkflowCoverageTest(unittest.TestCase):
         self.assertIn("git commit -s", hashes)
         self.assertIn("github.com/${{ github.repository_owner }}/valkey/archive", hashes)
         self.assertEqual(website.count("git commit -s"), 2)
+        container = workflow("update-valkey-container.yml")
+        self.assertIn("python3 -m http.server 8765", container)
+        self.assertIn("sha256sum", container)
+        self.assertIn("github.com/${REPO_OWNER}/valkey/archive", container)
 
     def test_cross_repo_qualification_checks_out_automation_implementation(self) -> None:
         qualification = workflow("qualify-release.yml")

@@ -108,15 +108,31 @@ jobs:
         env:
           VERSION: ${{ inputs.version }}
           STRIPPED_VERSION: ${{ steps.strip_version.outputs.stripped_version }}
+          REPO_OWNER: ${{ github.repository_owner }}
         run: |
             cd valkey-container
-            sed -i 's#https://github.com/valkey-io/valkey-hashes#https://github.com/${{ github.repository_owner }}/valkey-hashes#g' versions.sh
+            URL="https://github.com/${REPO_OWNER}/valkey/archive/refs/tags/${VERSION}.tar.gz"
+            mkdir -p "$RUNNER_TEMP/hash-ledger"
+            wget -qO "$RUNNER_TEMP/hash-ledger/valkey-${VERSION}.tar.gz" "$URL"
+            HASH=$(sha256sum "$RUNNER_TEMP/hash-ledger/valkey-${VERSION}.tar.gz" | cut -d' ' -f1)
+            printf 'hash valkey-%s.tar.gz sha256 %s %s\n' "$VERSION" "$HASH" "$URL" > "$RUNNER_TEMP/hash-ledger/README"
+            python3 -m http.server 8765 --directory "$RUNNER_TEMP/hash-ledger" > "$RUNNER_TEMP/hash-ledger.log" 2>&1 &
+            LEDGER_PID=$!
+            trap 'kill "$LEDGER_PID"' EXIT
+            for _ in {1..20}; do
+              wget -qO /dev/null http://127.0.0.1:8765/README && break
+              sleep 0.1
+            done
+            wget -qO /dev/null http://127.0.0.1:8765/README
+            sed -i 's#https://github.com/valkey-io/valkey-hashes/raw/main/README#http://127.0.0.1:8765/README#g' versions.sh
             jqt='.jq-template.awk'
             wget -qO "$jqt" 'https://github.com/docker-library/bashbrew/raw/9f6a35772ac863a0241f147c820354e4008edf38/scripts/jq-template.awk'
             jqf='.template-helper-functions.jq'
             wget -qO "$jqf" 'https://github.com/docker-library/bashbrew/raw/08c926140ad0af22de58c2a2656afda58082ba3e/scripts/template-helper-functions.jq'
 
             ./update.sh "$STRIPPED_VERSION"
+            kill "$LEDGER_PID"
+            trap - EXIT
             git checkout -- versions.sh
             git config user.name "github-actions[bot]"
             git config user.email "github-actions[bot]@users.noreply.github.com"

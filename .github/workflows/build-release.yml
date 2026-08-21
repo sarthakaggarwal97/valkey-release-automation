@@ -221,7 +221,9 @@ jobs:
       - prod-approval
     # prod-approval is skipped only for dev, so this must allow skipped needs
     # on that path while still refusing a failed or rejected production gate.
-    if: ${{ !failure() && !cancelled() && needs.process-inputs.outputs.environment == 'prod' }}
+    # The authenticated account has no valkey-hashes fork and GitHub refused
+    # creating one, so only upstream runs this repository write.
+    if: ${{ !failure() && !cancelled() && needs.process-inputs.outputs.environment == 'prod' && github.repository_owner == 'valkey-io' }}
     uses: ./.github/workflows/update-valkey-hashes.yml
     with:
       version: ${{ needs.process-inputs.outputs.version }}
@@ -257,7 +259,8 @@ jobs:
       - process-inputs
       - update-valkey-container
       - prod-approval
-    if: ${{ !failure() && !cancelled() && needs.process-inputs.outputs.environment == 'prod' && !contains(needs.process-inputs.outputs.version, '-rc') }}
+    # The authenticated account has no valkey-helm fork.
+    if: ${{ !failure() && !cancelled() && needs.process-inputs.outputs.environment == 'prod' && !contains(needs.process-inputs.outputs.version, '-rc') && github.repository_owner == 'valkey-io' }}
     uses: ./.github/workflows/update-valkey-helm.yml
     with:
       version: ${{ needs.process-inputs.outputs.version }}
@@ -402,7 +405,8 @@ jobs:
           needs.update-valkey-container.result == 'success' &&
           (needs.prod-approval.result == 'success' || needs.prod-approval.result == 'skipped') &&
           needs.process-inputs.outputs.environment == 'prod' &&
-          !contains(needs.process-inputs.outputs.version, '-rc') }}
+          !contains(needs.process-inputs.outputs.version, '-rc') &&
+          github.repository_owner == 'valkey-io' }}
     uses: ./.github/workflows/update-valkey-website.yml
     with:
       version: ${{ needs.process-inputs.outputs.version }}
