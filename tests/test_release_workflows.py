@@ -49,6 +49,8 @@ class ReleaseWorkflowCoverageTest(unittest.TestCase):
         self.assertIn('"$GITHUB_SHA" == "$CURRENT_SHA"', text)
         self.assertIn("Production automation is stale:", text)
         self.assertIn("release-publish must disable admin bypass", text)
+        self.assertIn('if has("can_admins_bypass") then .can_admins_bypass else true end', text)
+        self.assertNotIn(".can_admins_bypass // true", text)
         self.assertIn("release-publish must allow the sole fork owner to approve", text)
         self.assertIn("github.repository_owner == 'valkey-io'", text)
         self.assertIn("publish: ${{ github.repository_owner == 'valkey-io' }}", text)
