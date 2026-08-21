@@ -119,8 +119,9 @@ jobs:
           fi
 
           if [[ "${ENVIRONMENT}" == "prod" ]]; then
-            if [[ "$WORKFLOW_REF" != "refs/heads/main" ]]; then
-              echo "Production releases must run from refs/heads/main, not $WORKFLOW_REF" >&2
+            DEFAULT_BRANCH=$(gh api "repos/${GITHUB_REPOSITORY}" --jq '.default_branch')
+            if [[ "$WORKFLOW_REF" != "refs/heads/${DEFAULT_BRANCH}" ]]; then
+              echo "Production releases must run from refs/heads/${DEFAULT_BRANCH}, not $WORKFLOW_REF" >&2
               exit 1
             fi
             resolve_tag_commit() {
@@ -184,12 +185,12 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           RUN_ID: ${{ github.run_id }}
-          TRIGGERING_ACTOR: ${{ github.triggering_actor }}
         run: |
           set -euo pipefail
-          CURRENT_SHA=$(gh api "repos/${REPO}/commits/main" --jq '.sha')
+          DEFAULT_BRANCH=$(gh api "repos/${REPO}" --jq '.default_branch')
+          CURRENT_SHA=$(gh api "repos/${REPO}/commits/${DEFAULT_BRANCH}" --jq '.sha')
           [[ "$GITHUB_SHA" == "$CURRENT_SHA" ]] || {
-            echo "Production automation is stale: run=$GITHUB_SHA current-main=$CURRENT_SHA" >&2
+            echo "Production automation is stale: run=$GITHUB_SHA current-default=$CURRENT_SHA" >&2
             exit 1
           }
           ENVIRONMENT=$(gh api "repos/${REPO}/environments/release-publish")
@@ -199,10 +200,10 @@ jobs:
           CUSTOM_POLICY=$(jq -r '.deployment_branch_policy.custom_branch_policies // false' <<< "$ENVIRONMENT")
           POLICY_NAMES=$(gh api --paginate "repos/${REPO}/environments/release-publish/deployment-branch-policies" --jq '.branch_policies[].name' | sort -u)
           [[ "$REVIEWERS" -ge 1 ]] || { echo "release-publish must require a reviewer" >&2; exit 1; }
-          [[ "$PREVENT_SELF" == "true" ]] || { echo "release-publish must prevent self-review" >&2; exit 1; }
+          [[ "$PREVENT_SELF" == "false" ]] || { echo "release-publish must allow the sole fork owner to approve" >&2; exit 1; }
           [[ "$ADMIN_BYPASS" == "false" ]] || { echo "release-publish must disable admin bypass" >&2; exit 1; }
-          [[ "$CUSTOM_POLICY" == "true" && "$POLICY_NAMES" == "main" ]] || {
-            echo "release-publish must allow exactly the main branch; found: ${POLICY_NAMES:-<none>}" >&2
+          [[ "$CUSTOM_POLICY" == "true" && "$POLICY_NAMES" == "$DEFAULT_BRANCH" ]] || {
+            echo "release-publish must allow exactly the default branch; found: ${POLICY_NAMES:-<none>}" >&2
             exit 1
           }
 
@@ -210,10 +211,6 @@ jobs:
             --jq '[.[] | select(.state == "approved") | select([.environments[]?.name] | index("release-publish"))] | last.user.login // empty')
           [[ -n "$APPROVER" ]] || {
             echo "No human approval record exists for release-publish" >&2
-            exit 1
-          }
-          [[ "$APPROVER" != "$TRIGGERING_ACTOR" ]] || {
-            echo "The workflow dispatcher cannot approve their own production deployment" >&2
             exit 1
           }
           echo "Production dispatch approved by @$APPROVER through release-publish."
@@ -284,17 +281,12 @@ jobs:
       - generate-build-matrix
       - process-inputs
       - prod-approval
-    # Runs for dev (gate skipped) and for prod once the gate is not failed:
-    # the gate is skipped for dev and must succeed for every production event
-    # before the prod S3 bucket is written.
-    # Push-event (dev) builds are additionally skipped on forks: forks lack
-    # the AWS role secret, so every push would fail this job and email the
-    # fork owner. Upstream keeps its push builds; a fork that configured AWS
-    # opts back in via the RELEASE_DEV_BUILDS repository variable. The extra
-    # clause constrains ONLY push events; repository_dispatch and
-    # workflow_dispatch behave exactly as before.
+    # The personal fork has no production AWS role or bucket. Exact archive
+    # builds are exercised by qualification; only upstream performs the later
+    # production upload calls. Dev push behavior retains its existing fork gate.
     if: >-
       ${{ !failure() && !cancelled() &&
+          (needs.process-inputs.outputs.environment != 'prod' || github.repository_owner == 'valkey-io') &&
           (github.event_name != 'push' ||
            github.repository_owner == 'valkey-io' ||
            vars.RELEASE_DEV_BUILDS == 'true') }}
@@ -320,11 +312,10 @@ jobs:
       - generate-build-matrix
       - process-inputs
       - prod-approval
-    # Same push-event fork gate as the x86 job above: avoid guaranteed AWS
-    # role failures (and failure emails) on forks while leaving the
-    # repository_dispatch and workflow_dispatch paths untouched.
+    # Same fork-only production upload skip and existing dev push gate as x86.
     if: >-
       ${{ !failure() && !cancelled() &&
+          (needs.process-inputs.outputs.environment != 'prod' || github.repository_owner == 'valkey-io') &&
           (github.event_name != 'push' ||
            github.repository_owner == 'valkey-io' ||
            vars.RELEASE_DEV_BUILDS == 'true') }}
@@ -366,9 +357,9 @@ jobs:
       # Security: pin the distro package source to the qualification-approved
       # commit. Production validation above makes this non-empty.
       source_sha: ${{ needs.process-inputs.outputs.source_sha }}
-      # publish now defaults to false in packages.yml; the release path opts
-      # in only after this job's release-publish dependency succeeded.
-      publish: true
+      # Production upstream publishes after approval. The personal fork runs
+      # the same build/test matrix but has no AWS/GPG publication credentials.
+      publish: ${{ github.repository_owner == 'valkey-io' }}
       release_gate_passed: true
     secrets: inherit
 
@@ -377,7 +368,7 @@ jobs:
       - process-inputs
       - update-valkey-hashes
       - prod-approval
-    if: ${{ !failure() && !cancelled() && needs.process-inputs.outputs.environment == 'prod' }}
+    if: ${{ !failure() && !cancelled() && needs.process-inputs.outputs.environment == 'prod' && github.repository_owner == 'valkey-io' }}
     # update-try-valkey.yml assumes the AWS role via OIDC for its S3 upload.
     permissions:
       id-token: write

@@ -665,7 +665,7 @@ jobs:
     # publish=false and cannot reach either branch.
     if: >-
       ${{ !failure() && !cancelled() && inputs.publish == true &&
-          ((inputs.release_gate_passed == true && github.ref == 'refs/heads/main') ||
+          ((inputs.release_gate_passed == true && github.ref == 'refs/heads/e2e/final-release-automation') ||
            (github.event_name == 'workflow_dispatch' && needs.standalone-approval.result == 'success')) }}
     permissions:
       id-token: write

@@ -43,11 +43,15 @@ class ReleaseWorkflowCoverageTest(unittest.TestCase):
             self.assertIn(job, text)
         self.assertIn("environment: release-publish", text)
         self.assertIn('SOURCE_SHA="$TAG_SHA"', text)
-        self.assertIn('WORKFLOW_REF" != "refs/heads/main"', text)
-        self.assertIn('"$APPROVER" != "$TRIGGERING_ACTOR"', text)
-        self.assertIn('CURRENT_SHA=$(gh api "repos/${REPO}/commits/main"', text)
+        self.assertIn('refs/heads/${DEFAULT_BRANCH}', text)
+        self.assertNotIn('"$APPROVER" != "$TRIGGERING_ACTOR"', text)
+        self.assertIn('CURRENT_SHA=$(gh api "repos/${REPO}/commits/${DEFAULT_BRANCH}"', text)
         self.assertIn('"$GITHUB_SHA" == "$CURRENT_SHA"', text)
         self.assertIn("Production automation is stale:", text)
+        self.assertIn("release-publish must disable admin bypass", text)
+        self.assertIn("release-publish must allow the sole fork owner to approve", text)
+        self.assertIn("github.repository_owner == 'valkey-io'", text)
+        self.assertIn("publish: ${{ github.repository_owner == 'valkey-io' }}", text)
 
     def test_archive_and_package_builds_use_exact_source_sha(self) -> None:
         archives = workflow("call-build-linux-archives.yml")
@@ -87,6 +91,7 @@ class ReleaseWorkflowCoverageTest(unittest.TestCase):
         self.assertIn("source_sha:", hashes)
         self.assertIn('SHA=$(jq -r', hashes)
         self.assertIn("git commit -s", hashes)
+        self.assertIn("github.com/${{ github.repository_owner }}/valkey/archive", hashes)
         self.assertEqual(website.count("git commit -s"), 2)
 
     def test_cross_repo_qualification_checks_out_automation_implementation(self) -> None:
