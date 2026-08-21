@@ -171,9 +171,9 @@ class ReleaseWorkflowCoverageTest(unittest.TestCase):
             self.assertIn("release_owner:", text, name)
             self.assertIn("id: create-pr", text, name)
             self.assertIn("- name: Notify release owner", text, name)
-            self.assertIn("<!-- valkey-release-owner-review -->", text, name)
             self.assertIn("please review this automated release PR", text, name)
-            self.assertIn("steps.create-pr.outputs.pull-request-number != ''", text, name)
+            self.assertIn("steps.create-pr.outputs.pull-request-operation == 'created'", text, name)
+            self.assertIn("gh pr comment", text, name)
 
     def test_helm_update_is_reviewable_and_cannot_publish_a_chart(self) -> None:
         text = workflow("update-valkey-helm.yml")
