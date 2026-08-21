@@ -52,6 +52,7 @@ class ReleaseWorkflowCoverageTest(unittest.TestCase):
         self.assertIn("release-publish must allow the sole fork owner to approve", text)
         self.assertIn("github.repository_owner == 'valkey-io'", text)
         self.assertIn("publish: ${{ github.repository_owner == 'valkey-io' }}", text)
+        self.assertIn("official valkey-doc repository has no 8.0.11 predecessor tag", text)
 
     def test_archive_and_package_builds_use_exact_source_sha(self) -> None:
         archives = workflow("call-build-linux-archives.yml")

@@ -244,7 +244,9 @@ jobs:
       - process-inputs
       - update-valkey-hashes
       - prod-approval
-    if: ${{ !failure() && !cancelled() && needs.process-inputs.outputs.environment == 'prod' }}
+    # The official valkey-doc repository has no 8.0.11 predecessor tag, so the
+    # patch-tag workflow cannot run faithfully in the personal fork.
+    if: ${{ !failure() && !cancelled() && needs.process-inputs.outputs.environment == 'prod' && github.repository_owner == 'valkey-io' }}
     uses: ./.github/workflows/update-valkey-doc.yml
     with:
       version: ${{ needs.process-inputs.outputs.version }}
