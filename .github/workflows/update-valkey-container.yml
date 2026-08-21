@@ -7,6 +7,10 @@ on:
         type: string
         description: "Valkey version that was released"
         required: true
+      release_owner:
+        type: string
+        description: "GitHub login that approved the production release"
+        required: true
     outputs:
       bashbrew_output:
         description: "Bashbrew output in JSON format"
@@ -204,3 +208,26 @@ jobs:
             This pull request updates the repository to version `${{ inputs.version }}`.
 
             This pull request is created automatically by the [Valkey-Release-Automation](https://github.com/valkey-io/valkey-release-automation)
+
+      - name: Notify release owner
+        if: steps.create-pr.outputs.pull-request-number != ''
+        env:
+          GH_TOKEN: ${{ github.repository_owner == 'valkey-io' && steps.generate-token.outputs.token || secrets.AUTOMATION_PAT }}
+          TARGET_REPO: ${{ github.repository_owner }}/valkey-container
+          PR_NUMBER: ${{ steps.create-pr.outputs.pull-request-number }}
+          RELEASE_OWNER: ${{ inputs.release_owner }}
+        run: |
+          set -euo pipefail
+          [[ "$RELEASE_OWNER" =~ ^[A-Za-z0-9]([A-Za-z0-9-]{0,37}[A-Za-z0-9])?$ ]] || {
+            echo "Invalid release owner login: $RELEASE_OWNER" >&2
+            exit 1
+          }
+          [[ "$PR_NUMBER" =~ ^[1-9][0-9]*$ ]] || { echo "Invalid PR number: $PR_NUMBER" >&2; exit 1; }
+          marker='<!-- valkey-release-owner-review -->'
+          comments=$(gh api --paginate "repos/${TARGET_REPO}/issues/${PR_NUMBER}/comments" --jq '.[].body')
+          if grep -Fq "$marker" <<< "$comments"; then
+            echo "Release owner was already notified on PR #$PR_NUMBER."
+            exit 0
+          fi
+          body=$(printf '@%s, please review this automated release PR.\n\n%s' "$RELEASE_OWNER" "$marker")
+          gh api --method POST "repos/${TARGET_REPO}/issues/${PR_NUMBER}/comments" -f body="$body" >/dev/null
