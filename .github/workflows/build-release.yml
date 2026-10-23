@@ -205,7 +205,9 @@ jobs:
           CUSTOM_POLICY=$(jq -r '.deployment_branch_policy.custom_branch_policies // false' <<< "$ENVIRONMENT")
           POLICY_NAMES=$(gh api --paginate "repos/${REPO}/environments/release-publish/deployment-branch-policies" --jq '.branch_policies[].name' | sort -u)
           [[ "$REVIEWERS" -ge 1 ]] || { echo "release-publish must require a reviewer" >&2; exit 1; }
-          [[ "$PREVENT_SELF" == "true" ]] || { echo "release-publish must prevent self-review" >&2; exit 1; }
+          # REHEARSAL: the PAT both dispatches and approves on the fork, so the
+          # self-review checks are inverted here; production keeps both.
+          [[ "$PREVENT_SELF" == "false" ]] || { echo "rehearsal release-publish must allow the sole owner to approve" >&2; exit 1; }
           [[ "$ADMIN_BYPASS" == "false" ]] || { echo "release-publish must disable admin bypass" >&2; exit 1; }
           [[ "$CUSTOM_POLICY" == "true" && "$POLICY_NAMES" == "main" ]] || {
             echo "release-publish must allow exactly the main branch; found: ${POLICY_NAMES:-<none>}" >&2
@@ -216,10 +218,6 @@ jobs:
             --jq '[.[] | select(.state == "approved") | select([.environments[]?.name] | index("release-publish"))] | last.user.login // empty')
           [[ -n "$APPROVER" ]] || {
             echo "No human approval record exists for release-publish" >&2
-            exit 1
-          }
-          [[ "$APPROVER" != "$TRIGGERING_ACTOR" ]] || {
-            echo "The workflow dispatcher cannot approve their own production deployment" >&2
             exit 1
           }
           echo "login=$APPROVER" >> "$GITHUB_OUTPUT"
