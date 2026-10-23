@@ -158,7 +158,7 @@ jobs:
           # valkey repo, falling back to the committed changelog.
           resolve_line_version() {
             local line="$1" v=""
-            v=$(gh api "repos/valkey-io/valkey/git/matching-refs/tags/${line}." --jq '.[].ref' 2>/dev/null \
+            v=$(gh api "repos/${{ github.repository_owner }}/valkey/git/matching-refs/tags/${line}." --jq '.[].ref' 2>/dev/null \
               | sed 's|refs/tags/||' \
               | grep -E "^${line//./\\.}\.[0-9]+$" \
               | sort -V | tail -1) || true

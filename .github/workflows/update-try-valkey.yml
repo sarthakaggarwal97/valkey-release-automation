@@ -89,7 +89,7 @@ jobs:
               # so the input version should exactly match the latest release.
               # --exclude-drafts: drafts must not shadow the true latest
               # release; --limit 200: the default page is only 30 results.
-              LATEST_VERSION=$(gh release list --repo valkey-io/valkey --exclude-pre-releases --exclude-drafts --limit 200 --json tagName --jq '.[].tagName' | sort -V | tail -n1)
+              LATEST_VERSION=$(gh release list --repo ${{ github.repository_owner }}/valkey --exclude-pre-releases --exclude-drafts --limit 200 --json tagName --jq '.[].tagName' | sort -V | tail -n1)
               if [[ "$VERSION" == "$LATEST_VERSION" ]]; then
                   echo "Version validation passed: $VERSION == $LATEST_VERSION"
               else
